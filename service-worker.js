@@ -1,11 +1,10 @@
-const CACHE_NAME = 'lan-chat-v5';
+const CACHE_NAME = 'lan-chat-mesh-v1';
 const ASSETS_TO_CACHE = [
     './',
     './index.html',
     './style.css',
     './app.js',
     './manifest.json',
-    // [تعديل] حفظ الملفات المحلية الجديدة
     './assets/js/peerjs.min.js',
     './assets/fontawesome/css/all.min.css',
     './assets/notification.mp3',
@@ -19,11 +18,20 @@ self.addEventListener('install', (event) => {
     );
 });
 
+// استراتيجية Network First, Fallback to Cache
 self.addEventListener('fetch', (event) => {
     event.respondWith(
-        caches.match(event.request).then((cachedResponse) => {
-            return cachedResponse || fetch(event.request);
-        })
+        fetch(event.request)
+            .then((networkResponse) => {
+                // تحديث الكاش بالملفات الجديدة بصمت
+                const responseClone = networkResponse.clone();
+                caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
+                return networkResponse;
+            })
+            .catch(() => {
+                // إذا انقطع الإنترنت، استخدم الكاش المحلي
+                return caches.match(event.request);
+            })
     );
 });
 
@@ -32,9 +40,7 @@ self.addEventListener('activate', (event) => {
         caches.keys().then((cacheNames) => {
             return Promise.all(
                 cacheNames.map((cacheName) => {
-                    if (cacheName !== CACHE_NAME) {
-                        return caches.delete(cacheName);
-                    }
+                    if (cacheName !== CACHE_NAME) return caches.delete(cacheName);
                 })
             );
         })
