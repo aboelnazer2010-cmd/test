@@ -1,12 +1,15 @@
-const CACHE_NAME = 'lan-chat-v4';
+const CACHE_NAME = 'lan-chat-v5';
 const ASSETS_TO_CACHE = [
     './',
     './index.html',
     './style.css',
     './app.js',
     './manifest.json',
-    'https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js',
-    'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css'
+    // [تعديل] حفظ الملفات المحلية الجديدة
+    './assets/js/peerjs.min.js',
+    './assets/fontawesome/css/all.min.css',
+    './assets/notification.mp3',
+    './assets/avatar.png'
 ];
 
 self.addEventListener('install', (event) => {
