@@ -97,8 +97,11 @@ function init() {
     const magicLink = `${window.location.origin}${window.location.pathname}#${myId}`;
     if (magicLinkInput) magicLinkInput.value = magicLink;
 
+    // جلب الـ IP تلقائياً من رابط المتصفح
+    const dynamicHostIP = window.location.hostname || 'localhost';
+
     peer = new Peer(myId, {
-        host: '192.168.1.10', // <--- غير هذا إلى الـ IP الخاص بجهازك
+        host: dynamicHostIP, 
         port: 9000,
         path: '/myapp',
         config: { 'iceServers': [] }
@@ -1838,5 +1841,6 @@ if ('serviceWorker' in navigator) {
             });
     });
 }
+
 
 
