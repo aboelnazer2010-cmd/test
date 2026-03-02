@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TeamWave P2P Clone</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#006aff">
+</head>
+
+<body>
+
+    <div id="setup-screen" class="setup-overlay">
+        <div class="setup-box">
+            <h2><i class="fa-solid fa-link"></i> Connect to Team Chat <br> By AboElnazer</h2>
+
+            <div class="setup-section">
+                <p class="setup-label">Your Connection Code:</p>
+                <h1 id="my-id">...</h1>
+                <div class="magic-link-container">
+                    <input type="text" id="magic-link" readonly>
+                    <button id="copy-link-btn"><i class="fa-regular fa-copy"></i> Copy Link</button>
+                </div>
+            </div>
+
+            <div class="divider">OR</div>
+
+            <div class="setup-section">
+                <p class="setup-label">Join a workspace:</p>
+                <div class="join-container">
+                    <input type="text" id="target-id" placeholder="Enter 3-letter code (e.g. XYZ)" maxlength="3">
+                    <button id="connect-btn">Join Room</button>
+                </div>
+            </div>
+
+            <p id="connection-status">Waiting for network...</p>
+        </div>
+    </div>
+
+    <div class="app-container hidden" id="main-app">
+
+        <aside class="sidebar-left">
+            <div class="workspace-header">
+                <div class="workspace-info">
+                    <div class="workspace-icon"><i class="fa-solid fa-xmark"></i></div>
+                    <span class="workspace-name">P2P Share By AboElnazer</span>
+                </div>
+                <i class="fa-solid fa-angles-left collapse-icon"></i>
+            </div>
+
+            <nav class="left-nav">
+                <a href="#" class="nav-item active"><i class="fa-solid fa-house"></i> Home</a>
+                <a href="#" class="nav-item"><i class="fa-solid fa-magnifying-glass"></i> Search</a>
+                <a href="#" class="nav-item"><i class="fa-solid fa-briefcase"></i> Projects</a>
+                <a href="#" class="nav-item"><i class="fa-solid fa-book-open"></i> Library</a>
+            </nav>
+
+            <div class="channels-section mt-4">
+                <div class="section-header">
+                    <span>My Chatroom</span>
+                    <i class="fa-solid fa-plus add-icon"></i>
+                </div>
+
+                <div class="team-group">
+                    <div class="team-header">
+                        <span class="team-icon red">U</span>
+                        <span>UX & UI Team</span>
+                    </div>
+                    <div class="channel-list">
+                        <a href="#" class="chat-channel active" data-channel="General">
+                            <span class="channel-icon">🌍</span> General
+                        </a>
+                        <a href="#" class="chat-channel" data-channel="Social Media Thread">
+                            <span class="channel-icon">#</span> Thread - Social Media...
+                        </a>
+                        <a href="#" class="chat-channel" data-channel="Meme">
+                            <span class="channel-icon">😎</span> Meme
+                        </a>
+                        <a href="#" class="chat-channel" data-channel="Awokwokwk">
+                            <span class="channel-icon">🐸</span> Awokwokwk
+                        </a>
+                        <a href="#" class="add-channel-btn"><i class="fa-solid fa-plus"></i> Add channels</a>
+                    </div>
+                </div>
+
+                <div class="team-group mt-3">
+                    <div class="team-header">
+                        <span class="team-icon yellow">3</span>
+                        <span>3D Team</span>
+                    </div>
+                    <div class="channel-list">
+                        <a href="#" class="chat-channel" data-channel="3D General">
+                            <span class="channel-icon">🌍</span> General
+                        </a>
+                        <a href="#" class="add-channel-btn"><i class="fa-solid fa-plus"></i> Add channels</a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="footer-menu">
+                    <label for="theme-selector" class="theme-label">Theme:</label>
+                    <select id="theme-selector">
+                        <option value="light">Light</option>
+                        <option value="dark">Dark</option>
+                        <option value="sepia">Sepia</option>
+                        <option value="solarized">Solarized</option>
+                    </select>
+                    <a href="#"><i class="fa-solid fa-gear"></i> Settings</a>
+                </div>
+                <div class="user-profile">
+                    <img src="https://i.pravatar.cc/150?img=11" alt="User" class="user-avatar-sm">
+                    <span id="user-name" class="clickable">Brandon Franci</span>
+                    <i id="edit-name-icon" class="fa-solid fa-pen-to-square edit-name-icon" title="Edit name"></i>
+                </div>
+                <button class="record-btn">
+                    <i class="fa-solid fa-video"></i> Record a video
+                </button>
+            </div>
+        </aside>
+
+        <main class="main-chat-area">
+            <header class="chat-header-top">
+                <div class="breadcrumbs">
+                    <i class="fa-solid fa-arrow-left text-muted me-2"></i>
+                    <i class="fa-solid fa-arrow-right text-muted me-3"></i>
+                    <span class="crumb-item"><span class="team-icon-sm red">U</span> P2P By AboElnazer</span>
+                    <span class="divider">/</span>
+                    <span class="crumb-item">My Chatroom</span>
+                    <span class="divider">/</span>
+                    <span class="crumb-item">UX/UI Design: <span id="breadcrumb-active">🌍 General</span></span>
+                </div>
+                <div class="header-actions">
+                    <i class="fa-solid fa-share-nodes action-icon"></i>
+                    <button class="btn-thread"><span class="channel-icon">#</span> Thread</button>
+                    <div class="search-box">
+                        <i class="fa-solid fa-magnifying-glass"></i>
+                        <input type="text" placeholder="Search">
+                    </div>
+                </div>
+            </header>
+
+            <div class="channel-title-bar">
+                <h2 id="current-channel-title">🌍 General</h2>
+                <i class="fa-solid fa-thumbtack pin-icon"></i>
+            </div>
+
+            <div id="chat-box" class="chat-history scrollable">
+            </div>
+
+            <div id="transfer-container" class="hidden">
+                <!-- individual transfer-status items will be injected here via JavaScript -->
+            </div>
+
+            <div class="chat-input-area">
+                <div class="input-wrapper">
+                    <input type="text" id="message-input"
+                        placeholder="Hey there! 👋 I'm doing great, thanks for asking @Desirae Lipshutz">
+                    <div class="input-actions">
+                        <button class="icon-btn"><i class="fa-solid fa-microphone"></i></button>
+                        <input type="file" id="file-input" class="hidden" multiple>
+                        <button class="icon-btn" id="attach-btn"><i class="fa-solid fa-paperclip"></i></button>
+                        <button class="icon-btn"><i class="fa-solid fa-at"></i></button>
+                        <button class="icon-btn" id="emoji-btn"><i class="fa-regular fa-face-smile"></i></button>
+                        <button class="send-btn" id="send-msg-btn"><i class="fa-solid fa-arrow-up"></i></button>
+                    </div>
+                    <div id="emoji-picker" class="emoji-picker hidden">
+                        <span>😀</span><span>😂</span><span>😍</span><span>👍</span><span>🎉</span><span>🔥</span>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <aside class="sidebar-right">
+            <div class="members-header">
+                <span>All members</span>
+                <i class="fa-solid fa-ellipsis"></i>
+            </div>
+            <div id="members-list" class="members-list scrollable">
+            </div>
+            <div class="shared-files-section mt-4">
+                <div class="section-header">
+                    <span>Shared Files</span>
+                </div>
+                <div id="downloads" class="downloads-list scrollable">
+                </div>
+            </div>
+        </aside>
+
+    </div>
+
+    <div id="toaster" class="toaster"></div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
+
+
