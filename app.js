@@ -1,23 +1,16 @@
-const CHUNK_SIZE = 524288; // 512KB
+const CHUNK_SIZE = 65536; // 64KB توافق مثالي مع WebRTC
 
 let peer = null;
-
-// بنية الشبكة
 let isHost = true;
-let hostConnection = null;
-let clientConnections = {};
+let peerConnections = {}; // True Mesh: تخزين كل الاتصالات المباشرة
 
 let myId = '';
-let myName = 'Brandon Franci';
+let myName = 'User-' + Math.floor(Math.random() * 1000);
 const myAvatar = `./assets/avatar.png`;
 
-// حالة واجهة المستخدم وسجل الدردشة
 let currentChannel = 'General';
-let channelHistories = {
-    'General': [], 'Social Media Thread': [], 'Meme': [], 'Awokwokwk': [], '3D General': []
-};
+let channelHistories = { 'General': [], 'Meme': [] };
 
-// عناصر DOM
 const myIdEls = document.getElementById('my-id');
 const magicLinkInput = document.getElementById('magic-link');
 const copyLinkBtn = document.getElementById('copy-link-btn');
@@ -35,6 +28,485 @@ const searchInput = document.querySelector('.search-box input');
 const transferContainer = document.getElementById('transfer-container');
 const downloadsList = document.getElementById('downloads');
 const membersList = document.getElementById('members-list');
+const toaster = document.getElementById('toaster');
+const emojiBtn = document.getElementById('emoji-btn');
+const emojiPicker = document.getElementById('emoji-picker');
+const channelTitle = document.getElementById('current-channel-title');
+const breadcrumbActive = document.getElementById('breadcrumb-active');
+
+let incomingFiles = {};
+let transferItems = {};
+
+// --- حماية وأمان (XSS) ---
+function escapeHTML(str) {
+    if (!str) return '';
+    return str.replace(/[&<>'"]/g, tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag));
+}
+
+// --- حفظ المحادثات ---
+function saveStateToLocal() { try { localStorage.setItem('lan_chat_history', JSON.stringify(channelHistories)); } catch (e) {} }
+function loadStateFromLocal() {
+    try {
+        const saved = localStorage.getItem('lan_chat_history');
+        if (saved) channelHistories = JSON.parse(saved);
+    } catch (e) {}
+}
+
+function setTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    if(theme === 'light') document.documentElement.removeAttribute('data-theme');
+    localStorage.setItem('theme', theme);
+}
+
+function updateDarkModeButton() {
+    const sel = document.getElementById('theme-selector');
+    if (sel) sel.value = document.documentElement.getAttribute('data-theme') || 'light';
+}
+
+function generateId() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let result = '';
+    for (let i = 0; i < 6; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+    return result;
+}
+
+function init() {
+    loadStateFromLocal();
+    const saved = localStorage.getItem('theme');
+    if (saved) setTheme(saved);
+
+    myId = generateId();
+    if (myIdEls) myIdEls.innerText = myId;
+    const magicLink = `${window.location.origin}${window.location.pathname}#${myId}`;
+    if (magicLinkInput) magicLinkInput.value = magicLink;
+
+    // جلب الـ IP الديناميكي من المتصفح
+    const dynamicHostIP = window.location.hostname || 'localhost';
+
+    peer = new Peer(myId, {
+        host: dynamicHostIP, 
+        port: 9000,
+        path: '/myapp',
+        config: { 'iceServers': [] }
+    });
+
+    peer.on('open', () => {
+        if (statusEl) statusEl.innerText = 'Ready for connection.';
+        syncPeerListUI();
+        if (window.location.hash) {
+            let targetId = window.location.hash.substring(1).toUpperCase();
+            if (targetId.length === 6 && targetId !== myId) connectToHost(targetId);
+        }
+    });
+
+    peer.on('disconnected', () => {
+        showToast('Connection lost. Reconnecting...');
+        peer.reconnect();
+    });
+
+    peer.on('connection', (connection) => {
+        setupConnection(connection);
+        if (!setupScreen.classList.contains('hidden')) showMainApp();
+    });
+
+    peer.on('error', (err) => { console.error(err); showToast(`Network Error: Make sure Signaling Server is running on port 9000`); });
+
+    renderChatHistory(true);
+    setupUIInteractions();
+    updateDarkModeButton();
+}
+
+function showMainApp() {
+    setupScreen.classList.add('hidden');
+    mainApp.classList.remove('hidden');
+    const userNameSpan = document.getElementById('user-name');
+    if (userNameSpan) userNameSpan.innerText = myName;
+}
+
+// --- هندسة الـ True Mesh (لامركزية) ---
+function setupConnection(conn) {
+    conn.on('open', () => {
+        if (!peerConnections[conn.peer]) peerConnections[conn.peer] = { conn: conn, name: 'Unknown', avatar: '' };
+    });
+
+    conn.on('data', (data) => {
+        if (data.type === 'join') {
+            peerConnections[conn.peer].name = data.senderName;
+            peerConnections[conn.peer].avatar = data.senderAvatar;
+
+            if (isHost) {
+                const existingPeers = Object.keys(peerConnections).filter(id => id !== conn.peer);
+                safeSend(conn, { type: 'sync-state', histories: channelHistories, peers: existingPeers });
+            }
+            systemNotice(`<strong>${escapeHTML(data.senderName)}</strong> joined.`, 'General');
+            syncPeerListUI();
+
+        } else if (data.type === 'join-direct') {
+            peerConnections[conn.peer].name = data.senderName;
+            peerConnections[conn.peer].avatar = data.senderAvatar;
+            syncPeerListUI();
+
+        } else if (data.type === 'sync-state' && !isHost) {
+            channelHistories = data.histories;
+            Object.keys(channelHistories).forEach(ch => { if (!document.querySelector(`[data-channel="${ch}"]`)) addChannelToUI(ch); });
+            renderChatHistory(true);
+
+            if (data.peers && data.peers.length > 0) {
+                data.peers.forEach(pId => {
+                    if (pId !== myId && !peerConnections[pId]) {
+                        const newConn = peer.connect(pId, { reliable: true });
+                        setupConnection(newConn);
+                        newConn.on('open', () => safeSend(newConn, { type: 'join-direct', senderName: myName, senderAvatar: myAvatar }));
+                    }
+                });
+            }
+        } else if (data.type === 'chat') {
+            saveMessageToHistory(data.channel, data.text, data.senderName, data.senderAvatar, new Date(data.timestamp), data.senderId, false);
+            if (data.senderId !== myId) new Audio('./assets/notification.mp3').play().catch(() => {});
+        } else if (data.type === 'name-change') {
+            if (peerConnections[data.peerId]) peerConnections[data.peerId].name = data.newName;
+            syncPeerListUI();
+            systemNotice(`<strong>${escapeHTML(data.oldName)}</strong> changed name to <strong>${escapeHTML(data.newName)}</strong>.`, currentChannel);
+        } else if (data.type === 'file-meta' || data.type === 'file-chunk') {
+            handleFileData(data);
+        }
+    });
+
+    conn.on('close', () => {
+        const pName = peerConnections[conn.peer]?.name || conn.peer;
+        delete peerConnections[conn.peer];
+        systemNotice(`<strong>${escapeHTML(pName)}</strong> left.`, currentChannel);
+        syncPeerListUI();
+    });
+}
+
+function connectToHost(targetId) {
+    if (!targetId || targetId === myId) return;
+    isHost = false;
+    const connection = peer.connect(targetId, { reliable: true });
+    setupConnection(connection);
+    connection.on('open', () => safeSend(connection, { type: 'join', senderId: myId, senderName: myName, senderAvatar: myAvatar }));
+}
+
+async function safeSend(conn, data) {
+    if (!conn || !conn.open || !conn.dataChannel) return;
+    while (conn.dataChannel.bufferedAmount > 8 * 1024 * 1024) await new Promise(r => setTimeout(r, 1)); // 8MB Buffer
+    conn.send(data);
+}
+
+// البث عبر الشبكة بالكامل
+async function broadcast(data) {
+    for (let peerId in peerConnections) await safeSend(peerConnections[peerId].conn, data);
+}
+
+// --- معالجة استلام الملفات ---
+function handleFileData(data) {
+    if (data.type === 'file-meta') {
+        const fid = data.fileId;
+        incomingFiles[fid] = { meta: data.meta, chunks: [], receivedBytes: 0, senderName: data.senderName, senderId: data.senderId, channel: data.channel };
+        createTransferBar(fid, `Downloading ${data.meta.name}...`);
+    } else if (data.type === 'file-chunk') {
+        const fid = data.fileId;
+        const fileState = incomingFiles[fid];
+        if (!fileState) return;
+
+        if (fileState.timer) clearTimeout(fileState.timer);
+        fileState.timer = setTimeout(() => {
+            delete incomingFiles[fid];
+            removeTransferBar(fid);
+            showToast('Transfer timeout.');
+        }, 15000);
+
+        fileState.chunks.push(data.chunk);
+        fileState.receivedBytes += data.chunk.byteLength;
+
+        const progress = Math.round((fileState.receivedBytes / fileState.meta.size) * 100);
+        if (progress % 5 === 0 || progress === 100) updateTransferBar(fid, progress);
+
+        if (fileState.receivedBytes === fileState.meta.size) {
+            clearTimeout(fileState.timer);
+            setTimeout(() => removeTransferBar(fid), 500);
+            assembleFile(fid);
+        }
+    }
+}
+
+function getPreviewHtml(meta, url) {
+    if (meta.type.startsWith('image/')) return `<br><img src="${url}" class="file-preview">`;
+    if (meta.type.startsWith('video/')) return `<br><video src="${url}" class="file-preview" controls></video>`;
+    if (meta.type.startsWith('audio/')) return `<br><audio src="${url}" controls style="height: 40px; margin-top: 5px; max-width: 100%;"></audio>`;
+    if (meta.type === 'application/pdf') return `<br><embed src="${url}" type="application/pdf" width="100%" height="200px">`;
+    return '';
+}
+
+function assembleFile(fileId) {
+    const fileState = incomingFiles[fileId];
+    if (!fileState) return;
+    const blob = new Blob(fileState.chunks, { type: fileState.meta.type });
+    const url = URL.createObjectURL(blob);
+
+    const downloadItem = document.createElement('div');
+    downloadItem.className = 'download-item';
+    downloadItem.innerHTML = `
+        <div><i class="fa-solid fa-file me-2"></i><strong>${escapeHTML(fileState.meta.name)}</strong><br><small class="text-muted">From ${escapeHTML(fileState.senderName)}</small></div>
+        <a href="${url}" download="${escapeHTML(fileState.meta.name)}"><i class="fa-solid fa-download"></i></a>`;
+    if (downloadsList) downloadsList.prepend(downloadItem);
+
+    const preview = getPreviewHtml(fileState.meta, url);
+    saveMessageToHistory(fileState.channel, `Shared a file: <strong><a href="${url}" download="${escapeHTML(fileState.meta.name)}">${escapeHTML(fileState.meta.name)}</a></strong>${preview}`, fileState.senderName, '', new Date(), fileState.senderId, true);
+    delete incomingFiles[fileId];
+}
+
+// --- نظام التسجيل الصوتي المدمج ---
+let mediaRecorder;
+let audioChunks = [];
+let isRecording = false;
+
+document.getElementById('mic-btn').addEventListener('click', async function() {
+    if (!isRecording) {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+            mediaRecorder.onstop = async () => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                audioChunks = [];
+                const audioFile = new File([audioBlob], `Voice-${Date.now()}.webm`, { type: 'audio/webm' });
+                await sendVoiceFile(audioFile);
+            };
+            audioChunks = [];
+            mediaRecorder.start();
+            isRecording = true;
+            this.classList.add('recording-pulse');
+            showToast('Recording...');
+        } catch (err) {
+            showToast('Mic access denied. (HTTPS required)');
+        }
+    } else {
+        mediaRecorder.stop();
+        mediaRecorder.stream.getTracks().forEach(t => t.stop());
+        isRecording = false;
+        this.classList.remove('recording-pulse');
+    }
+});
+
+async function sendVoiceFile(file) {
+    const fileId = `${myId}-${Date.now()}-voice`;
+    const metaData = { type: 'file-meta', channel: currentChannel, senderId: myId, senderName: myName, fileId, meta: { name: file.name, size: file.size, type: file.type } };
+    await broadcast(metaData);
+    const localUrl = URL.createObjectURL(file);
+    const audioPlayerHtml = `<br><audio controls src="${localUrl}" style="height: 40px; margin-top: 5px; max-width: 100%;"></audio>`;
+    saveMessageToHistory(currentChannel, `Voice Note 🎤 ${audioPlayerHtml}`, myName, myAvatar, new Date(), myId, true);
+
+    await new Promise(resolve => {
+        let offset = 0;
+        const reader = new FileReader();
+        const readNextChunk = () => reader.readAsArrayBuffer(file.slice(offset, offset + CHUNK_SIZE));
+        reader.onload = async (e) => {
+            await broadcast({ type: 'file-chunk', senderId: myId, fileId, chunk: e.target.result });
+            offset += e.target.result.byteLength;
+            if (offset < file.size) readNextChunk();
+            else resolve();
+        };
+        readNextChunk();
+    });
+}
+
+// --- إرسال الرسائل النصية ---
+async function sendMessage() {
+    const text = msgInput.value.trim();
+    if (!text) return;
+    const timestamp = Date.now();
+    saveMessageToHistory(currentChannel, text, myName, myAvatar, new Date(timestamp), myId, false);
+    await broadcast({ type: 'chat', channel: currentChannel, senderId: myId, senderName: myName, senderAvatar: myAvatar, text: text, timestamp: timestamp });
+    msgInput.value = '';
+}
+
+// --- إرسال الملفات بدون انهيار الرام (Iterative Stream) ---
+async function sendFile() {
+    const files = fileInput.files;
+    if (!files || files.length === 0) return;
+
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const fileId = `${myId}-${Date.now()}-${Math.random().toString(36).substr(2,4)}`;
+        const metaData = { type: 'file-meta', channel: currentChannel, senderId: myId, senderName: myName, fileId, meta: { name: file.name, size: file.size, type: file.type } };
+        
+        await broadcast(metaData);
+        
+        const localUrl = URL.createObjectURL(file);
+        const previewOut = getPreviewHtml(file, localUrl);
+        saveMessageToHistory(currentChannel, `Sending file: <strong>${escapeHTML(file.name)}</strong>${previewOut}`, myName, myAvatar, new Date(), myId, true);
+        createTransferBar(fileId, `${file.name} (${i+1}/${files.length})`);
+
+        await new Promise((resolve) => {
+            let offset = 0;
+            const reader = new FileReader();
+            const readNextChunk = () => reader.readAsArrayBuffer(file.slice(offset, offset + CHUNK_SIZE));
+
+            reader.onload = async (e) => {
+                await broadcast({ type: 'file-chunk', senderId: myId, fileId, chunk: e.target.result });
+                offset += e.target.result.byteLength;
+                const progress = Math.round((offset / file.size) * 100);
+                if (progress % 2 === 0 || progress >= 100) updateTransferBar(fileId, Math.min(progress, 100));
+                if (offset < file.size) readNextChunk();
+                else {
+                    setTimeout(() => removeTransferBar(fileId), 500);
+                    resolve();
+                }
+            };
+            readNextChunk();
+        });
+    }
+    fileInput.value = '';
+}
+
+function changeName() {
+    const newName = prompt('Enter your display name:', myName);
+    if (!newName || newName.trim() === '' || newName === myName) return;
+    const oldName = myName;
+    myName = newName.trim();
+    document.getElementById('user-name').innerText = myName;
+    systemNotice(`<strong>You</strong> changed name to <strong>${escapeHTML(myName)}</strong>.`, currentChannel);
+    syncPeerListUI();
+    broadcast({ type: 'name-change', peerId: myId, oldName, newName: myName });
+}
+
+function switchChannel(channelName) {
+    currentChannel = channelName;
+    const titleText = channelName === 'General' ? '🌍 General' : `# ${channelName}`;
+    if (channelTitle) channelTitle.innerHTML = escapeHTML(titleText);
+    if (breadcrumbActive) breadcrumbActive.innerHTML = escapeHTML(titleText);
+    document.querySelectorAll('.chat-channel').forEach(btn => btn.classList.toggle('active', btn.dataset.channel === channelName));
+    renderChatHistory(true);
+}
+
+function addChannelToUI(channelName) {
+    const channelList = document.querySelector('.team-group .channel-list'); 
+    const newBtn = document.createElement('a');
+    newBtn.href = "#"; newBtn.className = "chat-channel"; newBtn.dataset.channel = channelName;
+    newBtn.innerHTML = `<span class="channel-icon">#</span> ${escapeHTML(channelName)}`;
+    newBtn.addEventListener('click', (e) => { e.preventDefault(); switchChannel(channelName); });
+    channelList.insertBefore(newBtn, channelList.lastElementChild);
+}
+
+function appendMessageToUI(msg) {
+    if (!chatBox) return;
+    if (msg.type === 'system') {
+        chatBox.insertAdjacentHTML('beforeend', `<div class="system-message msg-text text-center my-2 text-muted">${msg.text}</div>`);
+    } else {
+        const timeStr = new Date(msg.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const safeAvatar = msg.avatarUrl || `./assets/avatar.png`;
+        const mineClass = msg.senderId === myId ? ' mine' : '';
+        const finalContent = msg.isHTML ? msg.text : escapeHTML(msg.text);
+        chatBox.insertAdjacentHTML('beforeend', `<div class="message-group${mineClass}"><img src="${safeAvatar}" class="msg-avatar"><div class="msg-content"><div class="msg-header"><span class="sender-name">${escapeHTML(msg.sender)}</span><span class="msg-time">${timeStr}</span></div><div class="msg-text">${finalContent}</div></div></div>`);
+    }
+    chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+function saveMessageToHistory(channel, text, sender, avatarUrl, date, senderId = null, isHTML = false) {
+    if (!channelHistories[channel]) channelHistories[channel] = [];
+    const msgObj = { text, sender, avatarUrl, date, type: 'chat', senderId, isHTML };
+    channelHistories[channel].push(msgObj);
+    saveStateToLocal();
+    if (channel === currentChannel) appendMessageToUI(msgObj);
+}
+
+function systemNotice(text, channel) {
+    if (!channelHistories[channel]) channelHistories[channel] = [];
+    const msgObj = { text, type: 'system' };
+    channelHistories[channel].push(msgObj);
+    saveStateToLocal();
+    if (channel === currentChannel) appendMessageToUI(msgObj);
+}
+
+function renderChatHistory(forceClear = false) {
+    if (!chatBox) return;
+    if (forceClear) {
+        chatBox.innerHTML = '<div class="date-divider"><span>Today</span></div>';
+        const history = channelHistories[currentChannel] || [];
+        if (history.length === 0) chatBox.insertAdjacentHTML('beforeend', `<div class="system-message msg-text text-center mt-3">Beginning of <strong>${escapeHTML(currentChannel)}</strong> history.</div>`);
+        else history.forEach(msg => appendMessageToUI(msg));
+    }
+}
+
+function createTransferBar(id, text) {
+    if (!transferContainer) return null;
+    const item = document.createElement('div');
+    item.className = 'transfer-status';
+    item.dataset.transferId = id;
+    item.innerHTML = `<div class="transfer-info"><i class="fa-solid fa-file-arrow-up"></i><span class="transfer-filename">${escapeHTML(text)}</span><span class="transfer-percentage">0%</span></div><div class="progress-track"><div class="progress-fill" style="width:0%"></div></div>`;
+    transferContainer.appendChild(item);
+    transferContainer.classList.remove('hidden');
+    transferItems[id] = { item, filenameEl: item.querySelector('.transfer-filename'), percentEl: item.querySelector('.transfer-percentage'), fillEl: item.querySelector('.progress-fill') };
+    return transferItems[id];
+}
+
+function updateTransferBar(id, percentage) {
+    const t = transferItems[id];
+    if (t && t.percentEl) { t.percentEl.innerText = `${percentage}%`; t.fillEl.style.width = `${percentage}%`; }
+}
+
+function removeTransferBar(id) {
+    const t = transferItems[id];
+    if (t && t.item && transferContainer) transferContainer.removeChild(t.item);
+    delete transferItems[id];
+    if (Object.keys(transferItems).length === 0 && transferContainer) transferContainer.classList.add('hidden');
+}
+
+function showToast(message) { if (toaster) { toaster.innerText = message; toaster.classList.add('show'); setTimeout(() => toaster.classList.remove('show'), 2500); } }
+
+function syncPeerListUI() {
+    const list = [{ id: myId, name: myName + ' (Me)', avatar: myAvatar, role: isHost ? 'Room Creator' : 'Member' }];
+    Object.keys(peerConnections).forEach(pid => list.push({ id: pid, name: peerConnections[pid].name, avatar: peerConnections[pid].avatar, role: 'Member' }));
+    updateMembersList(list);
+}
+
+function updateMembersList(list) {
+    if (!membersList) return;
+    membersList.innerHTML = '';
+    list.forEach(member => {
+        membersList.insertAdjacentHTML('beforeend', `<div class="member-item" data-peer-id="${member.id}"><div class="avatar-wrapper"><img src="${member.avatar || myAvatar}" class="member-avatar"><span class="status-dot green"></span></div><div class="member-info"><span class="member-name">${escapeHTML(member.name)}</span><span class="member-role">${member.role}</span></div></div>`);
+    });
+}
+
+function setupUIInteractions() {
+    document.querySelectorAll('.chat-channel').forEach(btn => btn.addEventListener('click', (e) => { e.preventDefault(); switchChannel(btn.dataset.channel); }));
+    const collapseIcon = document.querySelector('.collapse-icon');
+    if (collapseIcon) collapseIcon.addEventListener('click', () => document.querySelector('.sidebar-left')?.classList.toggle('collapsed'));
+    
+    document.getElementById('user-name')?.addEventListener('click', changeName);
+    document.getElementById('edit-name-icon')?.addEventListener('click', changeName);
+
+    document.querySelectorAll('.add-channel-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const name = prompt("Enter new channel name:")?.trim();
+            if (name) {
+                if (!channelHistories[name]) channelHistories[name] = [];
+                addChannelToUI(name); switchChannel(name); 
+                broadcast({ type: 'new-channel', name: name });
+            }
+        });
+    });
+
+    if (emojiBtn && emojiPicker) {
+        emojiBtn.addEventListener('click', () => emojiPicker.classList.toggle('hidden'));
+        emojiPicker.querySelectorAll('span').forEach(emoji => emoji.addEventListener('click', () => { msgInput.value += emoji.innerText; emojiPicker.classList.add('hidden'); msgInput.focus(); }));
+    }
+
+    if (copyLinkBtn) copyLinkBtn.addEventListener('click', () => { magicLinkInput.select(); document.execCommand('copy'); showToast('Link copied!'); });
+    if (connectBtn) connectBtn.addEventListener('click', () => connectToHost(targetIdInput.value.trim().toUpperCase()));
+    if (sendMsgBtn) sendMsgBtn.addEventListener('click', sendMessage);
+    if (msgInput) msgInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
+    if (attachBtn) attachBtn.addEventListener('click', () => fileInput.click());
+    if (fileInput) fileInput.addEventListener('change', sendFile);
+    
+    const themeSelector = document.getElementById('theme-selector');
+    if (themeSelector) themeSelector.addEventListener('change', () => { setTheme(themeSelector.value); updateDarkModeButton(); });
+}
+
+init();const membersList = document.getElementById('members-list');
 const toaster = document.getElementById('toaster');
 const emojiBtn = document.getElementById('emoji-btn');
 const emojiPicker = document.getElementById('emoji-picker');
@@ -1841,6 +2313,7 @@ if ('serviceWorker' in navigator) {
             });
     });
 }
+
 
 
 
